@@ -1,17 +1,36 @@
 // Extracts the total amount (incl. VAT), invoice number and invoice date from the text of an invoice PDF
 // (output of `pdftotext -layout`). Pure functions, no I/O. Handles Dutch and English invoices. Whatever cannot be
 // found reliably stays null ("niet gevonden"); it never guesses.
+//
+// Capture groups that a pattern makes mandatory are read with `?? ""`: noUncheckedIndexedAccess cannot know
+// they are always present, and the fallback is never used.
+import type { Amount, Currency, InvoiceFields } from "./types.js";
 
 const CUR_RE = "(?:€|EUR|GBP|£|USD|US\\$|\\$)";
 // Amount with exactly two decimals; thousands separated by dot, comma, (narrow) no-break space or apostrophe.
 const NUM_RE = "(?:\\d{1,3}(?:[.,\\u00a0\\u202f'’]\\d{3})+|\\d+)[.,]\\d{2}(?![\\d%])";
-const AMOUNT_RE = () => new RegExp(`(?:(${CUR_RE})\\s?)?(-\\s?)?(${NUM_RE})(?:\\s?(${CUR_RE}))?`, "g");
+const AMOUNT_RE = (): RegExp =>
+  new RegExp(`(?:(${CUR_RE})\\s?)?(-\\s?)?(${NUM_RE})(?:\\s?(${CUR_RE}))?`, "g");
 
-const CURRENCY_OF = { "€": "EUR", EUR: "EUR", "£": "GBP", GBP: "GBP", $: "USD", US$: "USD", USD: "USD" };
+const CURRENCY_OF: Readonly<Record<string, Currency>> = {
+  "€": "EUR",
+  EUR: "EUR",
+  "£": "GBP",
+  GBP: "GBP",
+  $: "USD",
+  US$: "USD",
+  USD: "USD",
+};
 
-/** "1.234,56" / "1,234.56" / "12,00" / "1 234,56" (no-break space) -> Number. */
-export function parseNumber(s) {
-  const clean = String(s).replace(/[  '’\s]/g, (c) => (c === " " ? "" : "|"));
+/** An amount found in text, with its position (for ordering) and its currency when one is attached. */
+export interface FoundAmount extends Amount {
+  readonly index: number;
+}
+
+/** "1.234,56" / "1,234.56" / "12,00" / "1 234,56" (also with a no-break space) -> Number. */
+export function parseNumber(s: string): number {
+  // A plain space is dropped; every other separator (no-break spaces, apostrophes) becomes "|".
+  const clean = s.replace(/[\u00a0\u202f'\u2019\s]/g, (c) => (c === " " ? "" : "|"));
   const lastSep = Math.max(clean.lastIndexOf("."), clean.lastIndexOf(","));
   if (lastSep < 0) return Number(clean.replace(/\|/g, ""));
   const int = clean.slice(0, lastSep).replace(/[.,|]/g, "");
@@ -19,24 +38,25 @@ export function parseNumber(s) {
   return Number(`${int || "0"}.${dec}`);
 }
 
-const fold = (s) =>
-  String(s)
+/** Lower case without diacritics, for matching labels. */
+const fold = (s: string): string =>
+  s
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
 
 /** All amounts in a piece of text, with their currency when one is attached. */
-export function findAmounts(text) {
-  const out = [];
-  for (const m of String(text).matchAll(AMOUNT_RE())) {
+export function findAmounts(text: string): FoundAmount[] {
+  const out: FoundAmount[] = [];
+  for (const m of text.matchAll(AMOUNT_RE())) {
     // no percentages, no fragment of a date or number (e.g. 2026.10)
     const before = text[m.index - 1] ?? "";
     if (/[\d/]/.test(before)) continue;
     const cur = m[1] ?? m[4] ?? null;
-    let value = parseNumber(m[3]);
+    let value = parseNumber(m[3] ?? "");
     if (m[2]) value = -value;
     if (!Number.isFinite(value)) continue;
-    out.push({ value, currency: cur ? CURRENCY_OF[cur] : null, index: m.index });
+    out.push({ value, currency: cur ? (CURRENCY_OF[cur] ?? null) : null, index: m.index });
   }
   return out;
 }
@@ -53,11 +73,16 @@ const TIER1 = [
   /\b(vervalt\s*op|due\s*(on|by)\b|due\s*(\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))/,
 ];
 const TIER2 = [/\b(totaal|total)\b/];
-const NOT_TOTAL = /\b(sub\s*-?\s*tota\w*|excl\w*|exclusive|zonder\s*btw|before\s*tax|netto|net\s*total|btw\s*%|vat\s*%|tax\s*rate)\b/;
+const NOT_TOTAL =
+  /\b(sub\s*-?\s*tota\w*|excl\w*|exclusive|zonder\s*btw|before\s*tax|netto|net\s*total|btw\s*%|vat\s*%|tax\s*rate)\b/;
 const VAT_ONLY = /\b(btw|vat|tax|omzetbelasting)\b/;
 const INCL = /\b(incl\w*|inc)\b/;
+const CUR_WORDS = /\b(EUR|GBP|USD)\b/g;
 
-function tierOf(lineFolded) {
+/** 0 = not a total line, 1 = explicit total incl. VAT or amount due, 2 = a bare "total". */
+type Tier = 0 | 1 | 2;
+
+function tierOf(lineFolded: string): Tier {
   if (NOT_TOTAL.test(lineFolded)) return 0;
   // "Totaal btw" / "Total VAT" is the VAT amount, not the total (unless it says "incl.")
   if (VAT_ONLY.test(lineFolded) && !INCL.test(lineFolded)) return 0;
@@ -67,36 +92,37 @@ function tierOf(lineFolded) {
 }
 
 /** The currency that occurs most often in the document (for amounts without their own symbol). */
-export function dominantCurrency(text) {
-  const t = String(text);
-  const counts = {
-    EUR: (t.match(/€|\bEUR\b/g) ?? []).length,
-    GBP: (t.match(/£|\bGBP\b/g) ?? []).length,
-    USD: (t.match(/US\$|\bUSD\b|\$/g) ?? []).length,
-  };
-  const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
-  return best[1] > 0 ? best[0] : null;
+export function dominantCurrency(text: string): Currency | null {
+  const counts: [Currency, number][] = [
+    ["EUR", (text.match(/€|\bEUR\b/g) ?? []).length],
+    ["GBP", (text.match(/£|\bGBP\b/g) ?? []).length],
+    ["USD", (text.match(/US\$|\bUSD\b|\$/g) ?? []).length],
+  ];
+  // Ties go to the first entry, in the order above.
+  const [currency, count] = counts.reduce((a, b) => (b[1] > a[1] ? b : a));
+  return count > 0 ? currency : null;
 }
 
-/** Total amount incl. VAT: { value, currency } or null. */
-export function extractAmount(text) {
+/** Total amount incl. VAT, or null. */
+export function extractAmount(text: string | null | undefined): Amount | null {
   if (!text) return null;
-  const lines = String(text).split(/\r?\n/);
-  const cands = { 1: [], 2: [] };
-  for (let i = 0; i < lines.length; i++) {
-    const f = fold(lines[i]);
-    const tier = tierOf(f);
+  const lines = text.split(/\r?\n/);
+  const cands: Record<1 | 2, FoundAmount[]> = { 1: [], 2: [] };
+  for (const [i, line] of lines.entries()) {
+    const tier = tierOf(fold(line));
     if (!tier) continue;
-    let found = findAmounts(lines[i]);
+    let found = findAmounts(line);
     // label on this line, amount on the next (column layout)
-    for (let j = 1; found.length === 0 && j <= 2 && i + j < lines.length; j++) {
-      if (tierOf(fold(lines[i + j])) === 0 && !/[a-z]{4,}/i.test(lines[i + j].replace(CUR_WORDS, "")))
-        found = findAmounts(lines[i + j]);
+    for (let j = 1; found.length === 0 && j <= 2; j++) {
+      const next = lines[i + j];
+      if (next === undefined) break;
+      if (tierOf(fold(next)) === 0 && !/[a-z]{4,}/i.test(next.replace(CUR_WORDS, "")))
+        found = findAmounts(next);
     }
-    for (const a of found) cands[tier].push(a);
+    cands[tier].push(...found);
   }
   const doc = dominantCurrency(text);
-  for (const tier of [1, 2]) {
+  for (const tier of [1, 2] as const) {
     const pos = cands[tier].filter((a) => a.value > 0);
     const pool = pos.length ? pos : cands[tier];
     if (!pool.length) continue;
@@ -105,7 +131,6 @@ export function extractAmount(text) {
   }
   return null;
 }
-const CUR_WORDS = /\b(EUR|GBP|USD)\b/g;
 
 // ---------------------------------------------------------------- invoice number
 
@@ -119,49 +144,51 @@ const NUMBER_LABELS = [
 ];
 const TOKEN_RE = /[A-Z0-9][A-Z0-9\-/._]{1,40}/gi;
 
-function looksLikeDate(tok) {
+function looksLikeDate(tok: string): boolean {
   return /^\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}$/.test(tok);
 }
-function validNumberToken(tok) {
+function validNumberToken(tok: string): string | null {
   const t = tok.replace(/[._\-/]+$/, "");
   if (t.length < 3 || !/\d/.test(t)) return null;
   if (looksLikeDate(t)) return null;
   if (/^\d+[.,]\d{2}$/.test(t)) return null; // an amount
   return t;
 }
-function firstToken(s) {
-  for (const m of String(s).matchAll(TOKEN_RE)) {
-    const v = validNumberToken(m[0]);
-    if (v) return v;
-    // only the first token right after the label counts; anything else is something else
-    return null;
-  }
-  return null;
+function firstToken(s: string): string | null {
+  // only the first token right after the label counts; anything else is something else
+  const [m] = s.matchAll(TOKEN_RE);
+  return m ? validNumberToken(m[0]) : null;
 }
 
 /** Invoice number from the PDF text, falling back to the subject. */
-export function extractInvoiceNumber(text, subject = "") {
-  const lines = String(text ?? "").split(/\r?\n/);
+export function extractInvoiceNumber(text: string | null | undefined, subject = ""): string | null {
+  const lines = (text ?? "").split(/\r?\n/);
   for (const label of NUMBER_LABELS) {
-    for (let i = 0; i < lines.length; i++) {
-      const m = label.exec(lines[i]);
+    for (const [i, line] of lines.entries()) {
+      const m = label.exec(line);
       if (!m) continue;
-      const rest = lines[i].slice(m.index + m[0].length).replace(/^[\s:#.]*/, "");
+      const after = line.slice(m.index + m[0].length);
+      const rest = after.replace(/^[\s:#.]*/, "");
       const same = firstToken(rest);
       if (same) return same;
-      if (rest.trim() === "" || /^\s{2,}/.test(lines[i].slice(m.index + m[0].length))) {
+      if (rest.trim() === "" || /^\s{2,}/.test(after)) {
         // value in the same column on the next line(s); when the label stands alone, the whole next line
         const col = Math.max(0, m.index - 2);
         for (const next of [lines[i + 1] ?? "", lines[i + 2] ?? ""]) {
-          const below = firstToken(next.slice(col).replace(/^\s*/, "")) ?? (rest.trim() === "" ? firstToken(next.trim()) : null);
+          const below =
+            firstToken(next.slice(col).replace(/^\s*/, "")) ??
+            (rest.trim() === "" ? firstToken(next.trim()) : null);
           if (below) return below;
         }
       }
     }
   }
-  const s = /\b(factuur|invoice|receipt|nota)\b\s*(nr|no|number|nummer)?\.?\s*[:#]?\s*([A-Z0-9][A-Z0-9\-/._]{2,40})/i.exec(subject);
+  const s =
+    /\b(factuur|invoice|receipt|nota)\b\s*(nr|no|number|nummer)?\.?\s*[:#]?\s*([A-Z0-9][A-Z0-9\-/._]{2,40})/i.exec(
+      subject,
+    );
   if (s) {
-    const v = validNumberToken(s[3]);
+    const v = validNumberToken(s[3] ?? "");
     if (v) return v;
   }
   return null;
@@ -169,22 +196,57 @@ export function extractInvoiceNumber(text, subject = "") {
 
 // ---------------------------------------------------------------- invoice date
 
-const MONTHS = {
-  jan: 1, januari: 1, january: 1,
-  feb: 2, februari: 2, february: 2,
-  mrt: 3, maart: 3, mar: 3, march: 3,
-  apr: 4, april: 4,
-  mei: 5, may: 5,
-  jun: 6, juni: 6, june: 6,
-  jul: 7, juli: 7, july: 7,
-  aug: 8, augustus: 8, august: 8,
-  sep: 9, sept: 9, september: 9,
-  okt: 10, oktober: 10, oct: 10, october: 10,
-  nov: 11, november: 11,
-  dec: 12, december: 12,
+const MONTHS: Readonly<Record<string, number>> = {
+  jan: 1,
+  januari: 1,
+  january: 1,
+  feb: 2,
+  februari: 2,
+  february: 2,
+  mrt: 3,
+  maart: 3,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  mei: 5,
+  may: 5,
+  jun: 6,
+  juni: 6,
+  june: 6,
+  jul: 7,
+  juli: 7,
+  july: 7,
+  aug: 8,
+  augustus: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  okt: 10,
+  oktober: 10,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
 };
-const MONTH_RE = Object.keys(MONTHS).sort((a, b) => b.length - a.length).join("|");
-const DATE_PATTERNS = [
+const MONTH_RE = Object.keys(MONTHS)
+  .sort((a, b) => b.length - a.length)
+  .join("|");
+
+/** Year, month and day as captured; validated (and converted) by isoDate. */
+type DateParts = readonly [
+  string | number | undefined,
+  string | number | undefined,
+  string | number | undefined,
+];
+
+const monthOf = (name: string | undefined): number | undefined =>
+  MONTHS[(name ?? "").toLowerCase()];
+
+const DATE_PATTERNS: readonly { re: RegExp; f: (m: RegExpExecArray) => DateParts }[] = [
   { re: /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/, f: (m) => [m[1], m[2], m[3]] },
   {
     re: /\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b/,
@@ -195,11 +257,17 @@ const DATE_PATTERNS = [
       return b > 12 && a <= 12 ? [m[3], a, b] : [m[3], b, a];
     },
   },
-  { re: new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_RE})\\.?,?\\s+(\\d{4})\\b`, "i"), f: (m) => [m[3], MONTHS[m[2].toLowerCase()], m[1]] },
-  { re: new RegExp(`\\b(${MONTH_RE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`, "i"), f: (m) => [m[3], MONTHS[m[1].toLowerCase()], m[2]] },
+  {
+    re: new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_RE})\\.?,?\\s+(\\d{4})\\b`, "i"),
+    f: (m) => [m[3], monthOf(m[2]), m[1]],
+  },
+  {
+    re: new RegExp(`\\b(${MONTH_RE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`, "i"),
+    f: (m) => [m[3], monthOf(m[1]), m[2]],
+  },
 ];
 
-function isoDate(y, mo, d) {
+function isoDate([y, mo, d]: DateParts): string | null {
   const Y = Number(y);
   const M = Number(mo);
   const D = Number(d);
@@ -208,13 +276,14 @@ function isoDate(y, mo, d) {
   if (dt.getUTCMonth() !== M - 1) return null;
   return `${Y}-${String(M).padStart(2, "0")}-${String(D).padStart(2, "0")}`;
 }
+
 /** First date in a piece of text as YYYY-MM-DD. */
-export function findDate(s) {
-  let best = null;
+export function findDate(s: string): string | null {
+  let best: { iso: string; index: number } | null = null;
   for (const p of DATE_PATTERNS) {
     const m = p.re.exec(s);
     if (!m) continue;
-    const iso = isoDate(...p.f(m));
+    const iso = isoDate(p.f(m));
     if (iso && (best === null || m.index < best.index)) best = { iso, index: m.index };
   }
   return best?.iso ?? null;
@@ -224,22 +293,28 @@ const DATE_LABELS = [
   /\b(factuurdatum|datum\s*factuur|factuur\s*datum|uitgiftedatum|datum\s*van\s*uitgifte|invoice\s*date|date\s*of\s*issue|issue\s*date|date\s*issued|issued\s*on|date\s*paid|betaaldatum|notadatum)\b/i,
   /\b(datum|date)\b/i,
 ];
-const NOT_INVOICE_DATE = /\b(verval\w*|due|leverdatum|delivery|period|periode|tot|until|expir\w*|geboorte\w*)\b/i;
+const GENERIC_DATE_LABEL = DATE_LABELS[1];
+// A generic "Datum"/"Date" label preceded by one of these words is a due, delivery or birth date.
+const NOT_INVOICE_DATE =
+  /\b(verval\w*|due|leverdatum|delivery|period|periode|tot|until|expir\w*|geboorte\w*)\b/i;
 
 /** Invoice date as YYYY-MM-DD, or null. */
-export function extractInvoiceDate(text) {
-  const lines = String(text ?? "").split(/\r?\n/);
+export function extractInvoiceDate(text: string | null | undefined): string | null {
+  const lines = (text ?? "").split(/\r?\n/);
   for (const label of DATE_LABELS) {
-    for (let i = 0; i < lines.length; i++) {
-      const m = label.exec(lines[i]);
+    for (const [i, line] of lines.entries()) {
+      const m = label.exec(line);
       if (!m) continue;
-      if (label === DATE_LABELS[1] && NOT_INVOICE_DATE.test(lines[i].slice(Math.max(0, m.index - 15), m.index + m[0].length)))
+      const end = m.index + m[0].length;
+      if (
+        label === GENERIC_DATE_LABEL &&
+        NOT_INVOICE_DATE.test(line.slice(Math.max(0, m.index - 15), end))
+      )
         continue;
-      const rest = lines[i].slice(m.index + m[0].length, m.index + m[0].length + 40);
-      const same = findDate(rest);
+      const same = findDate(line.slice(end, end + 40));
       if (same) return same;
       const col = Math.max(0, m.index - 2);
-      const alone = lines[i].slice(m.index + m[0].length).trim() === "";
+      const alone = line.slice(end).trim() === "";
       for (const next of [lines[i + 1] ?? "", lines[i + 2] ?? ""]) {
         const below = findDate(next.slice(col, col + 40)) ?? (alone ? findDate(next) : null);
         if (below) return below;
@@ -250,7 +325,7 @@ export function extractInvoiceDate(text) {
 }
 
 /** Everything at once. */
-export function extractInvoiceFields(text, subject = "") {
+export function extractInvoiceFields(text: string | null | undefined, subject = ""): InvoiceFields {
   return {
     amount: extractAmount(text),
     number: extractInvoiceNumber(text, subject),
@@ -259,8 +334,11 @@ export function extractInvoiceFields(text, subject = "") {
 }
 
 /** "EUR 1.234,56" (Dutch notation) or "bedrag niet gevonden". */
-export function formatAmount(amount) {
+export function formatAmount(amount: Amount | null | undefined): string {
   if (!amount) return "bedrag niet gevonden";
-  const n = new Intl.NumberFormat("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount.value);
+  const n = new Intl.NumberFormat("nl-NL", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount.value);
   return `${amount.currency ?? "valuta onbekend"} ${n}`;
 }

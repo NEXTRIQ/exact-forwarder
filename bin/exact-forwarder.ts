@@ -3,18 +3,19 @@
 //   exact-forwarder                 one run (meant for a timer, e.g. every 15 minutes)
 //   exact-forwarder seed --since <ISO> [--message-ids <file>] [--force]
 //   exact-forwarder status          print status.json (no secrets)
-import { ConfigError, configFromEnv } from "../src/config.mjs";
-import { createImap } from "../src/imap.mjs";
-import { runOnce, seed } from "../src/main.mjs";
-import { sendTelegram } from "../src/notify.mjs";
-import { pdfToText } from "../src/pdf.mjs";
-import { createSmtp } from "../src/smtp.mjs";
-import { readStatus } from "../src/state.mjs";
+import { ConfigError, configFromEnv } from "../src/config.js";
+import { createImap } from "../src/imap.js";
+import { runOnce, seed } from "../src/main.js";
+import { sendTelegram } from "../src/notify.js";
+import { pdfToText } from "../src/pdf.js";
+import { createSmtp } from "../src/smtp.js";
+import { readStatus } from "../src/state.js";
+import type { Notifier } from "../src/types.js";
 
 // Last line of defence: error messages from libraries must never echo credentials into the journal.
-const scrub = (s) => String(s).replace(/(bot)\d+:[\w-]+/g, "$1<token>");
+const scrub = (s: unknown): string => String(s).replace(/(bot)\d+:[\w-]+/g, "$1<token>");
 
-async function main() {
+async function main(): Promise<void> {
   const [cmd = "run", ...args] = process.argv.slice(2);
   const cfg = configFromEnv();
   if (cmd === "status") {
@@ -22,30 +23,45 @@ async function main() {
     return;
   }
   if (!cfg.pass) throw new ConfigError("MAIL_PASSWORD is required");
-  const opt = (name) => {
+  const opt = (name: string): string | undefined => {
     const i = args.indexOf(name);
     return i >= 0 ? args[i + 1] : undefined;
   };
 
   if (cmd === "seed") {
-    const mailbox = createImap({ host: cfg.imapHost, user: cfg.account, pass: cfg.pass, readOnly: true });
-    const r = await seed(cfg, { mailbox }, {
-      since: new Date(opt("--since") ?? ""),
-      messageIdsFile: opt("--message-ids") ?? null,
-      force: args.includes("--force"),
+    const mailbox = createImap({
+      host: cfg.imapHost,
+      user: cfg.account,
+      pass: cfg.pass,
+      readOnly: true,
     });
+    const r = await seed(
+      cfg,
+      { mailbox },
+      {
+        since: new Date(opt("--since") ?? ""),
+        messageIdsFile: opt("--message-ids") ?? null,
+        force: args.includes("--force"),
+      },
+    );
     process.stdout.write(`${JSON.stringify({ seeded: true, ...r })}\n`);
     return;
   }
   if (cmd !== "run") throw new ConfigError(`unknown command: ${cmd}`);
 
-  const telegram = cfg.telegramToken && cfg.telegramChatId
-    ? (text) => sendTelegram({ token: cfg.telegramToken, chatId: cfg.telegramChatId }, text)
-    : null;
+  const { telegramToken: token, telegramChatId: chatId } = cfg;
+  const telegram: Notifier | null =
+    token && chatId ? (text) => sendTelegram({ token, chatId }, text) : null;
   // Doubtful invoices are only safe to hold back when someone hears about them.
-  if (!cfg.dryRun && !telegram && !cfg.notifyEmail) throw new ConfigError("configure NOTIFY_EMAIL and/or TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID");
+  if (!cfg.dryRun && !telegram && !cfg.notifyEmail)
+    throw new ConfigError("configure NOTIFY_EMAIL and/or TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID");
 
-  const mailbox = createImap({ host: cfg.imapHost, user: cfg.account, pass: cfg.pass, readOnly: cfg.dryRun });
+  const mailbox = createImap({
+    host: cfg.imapHost,
+    user: cfg.account,
+    pass: cfg.pass,
+    readOnly: cfg.dryRun,
+  });
   const smtp = cfg.dryRun
     ? null
     : createSmtp({
@@ -62,8 +78,10 @@ async function main() {
   if (!summary.paused && !summary.ok) process.exitCode = 1;
 }
 
-main().catch((e) => {
+main().catch((e: unknown) => {
   const prefix = e instanceof ConfigError ? "configuration error" : "error";
-  process.stderr.write(`exact-forwarder: ${prefix}: ${scrub(e instanceof Error ? e.message : e)}\n`);
+  process.stderr.write(
+    `exact-forwarder: ${prefix}: ${scrub(e instanceof Error ? e.message : e)}\n`,
+  );
   process.exit(e instanceof ConfigError ? 78 : 1); // 78 = EX_CONFIG
 });

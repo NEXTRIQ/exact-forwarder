@@ -32,4 +32,9 @@ bij twijfel, de reden.
 Volg de stappen in de [Engelse README](README.md#installation-linux-systemd): eerst een droogloop
 (`DRY_RUN=1`), dan `seed`, dan live. Alle instellingen staan in [`env.example`](env.example).
 
+## Ontwikkeling
+
+De code is TypeScript in strict mode. `npm ci && npm run check` controleert types, lint, opmaak en draait de
+tests. `npm run build` compileert naar `dist/`. Zie [Development](README.md#development) voor de opbouw.
+
 Licentie: MIT. Niet verbonden aan Exact. Gemaakt door [NEXTRIQ](https://nextriq.nl).

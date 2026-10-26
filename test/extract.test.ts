@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractAmount, extractInvoiceDate, extractInvoiceNumber, formatAmount, parseNumber } from "../src/extract.mjs";
+import {
+  extractAmount,
+  extractInvoiceDate,
+  extractInvoiceNumber,
+  formatAmount,
+  parseNumber,
+} from "../src/extract.js";
 
 test("parseNumber: Dutch and English notation", () => {
   assert.equal(parseNumber("1.234,56"), 1234.56);
@@ -50,7 +56,8 @@ Amount due   $0.00
 });
 
 test("GBP with the currency after the amount and a date like 12 Oct 2026", () => {
-  const text = "Invoice no. 202612345678\nInvoice date: 12 Oct 2026\nTotal amount   8.40 GBP\nVAT 20%  1.40 GBP";
+  const text =
+    "Invoice no. 202612345678\nInvoice date: 12 Oct 2026\nTotal amount   8.40 GBP\nVAT 20%  1.40 GBP";
   assert.deepEqual(extractAmount(text), { value: 8.4, currency: "GBP" });
   assert.equal(extractInvoiceNumber(text), "202612345678");
   assert.equal(extractInvoiceDate(text), "2026-10-12");
@@ -72,7 +79,10 @@ test("column layout: label above the value", () => {
 test("nothing found stays null; invoice number falls back to the subject", () => {
   assert.equal(extractAmount("Bedankt voor uw bestelling"), null);
   assert.equal(extractAmount(null), null);
-  assert.equal(extractInvoiceNumber("geen nummer", "Your invoice #INV-2026-09 is ready"), "INV-2026-09");
+  assert.equal(
+    extractInvoiceNumber("geen nummer", "Your invoice #INV-2026-09 is ready"),
+    "INV-2026-09",
+  );
   assert.equal(extractInvoiceNumber("Invoice date 12-10-2026"), null);
   assert.equal(extractInvoiceDate("geen datum"), null);
   assert.equal(formatAmount(null), "bedrag niet gevonden");
@@ -97,14 +107,29 @@ test("'Charges' below subtotal and VAT is the total", () => {
 });
 
 test("Stripe header: 'US$ x vervalt op' and '€x due October 1'", () => {
-  assert.deepEqual(extractAmount("US$ 12,34 vervalt op 12 augustus 2026\nOnline betalen\nWorkers 1 US$ 5,00"), { value: 12.34, currency: "USD" });
-  assert.deepEqual(extractAmount("€20.00 due October 1, 2026\nPay online"), { value: 20, currency: "EUR" });
+  assert.deepEqual(
+    extractAmount("US$ 12,34 vervalt op 12 augustus 2026\nOnline betalen\nWorkers 1 US$ 5,00"),
+    { value: 12.34, currency: "USD" },
+  );
+  assert.deepEqual(extractAmount("€20.00 due October 1, 2026\nPay online"), {
+    value: 20,
+    currency: "EUR",
+  });
   assert.deepEqual(extractAmount("Verschuldigd bedrag   € 7,26"), { value: 7.26, currency: "EUR" });
 });
 
 test("invoice number and date: transaction id instead of VAT number, 'Uitgiftedatum', label alone above the value", () => {
-  const github = "Date 2026-10-01 10:00AM PDT\nVAT/GST Registration   EU999999999\nNumber\n\nTransaction ID         ch_3PqR7xYz9AbC\nTotal $4.00";
+  const github =
+    "Date 2026-10-01 10:00AM PDT\nVAT/GST Registration   EU999999999\nNumber\n\nTransaction ID         ch_3PqR7xYz9AbC\nTotal $4.00";
   assert.equal(extractInvoiceNumber(github), "ch_3PqR7xYz9AbC");
-  assert.equal(extractInvoiceDate("Factuurnummer IN-12345678\nUitgiftedatum 12 augustus 2026\nVervaldatum 26 augustus 2026"), "2026-08-12");
-  assert.equal(extractInvoiceDate("                         Factuurdatum\n31 aug. 2026"), "2026-08-31");
+  assert.equal(
+    extractInvoiceDate(
+      "Factuurnummer IN-12345678\nUitgiftedatum 12 augustus 2026\nVervaldatum 26 augustus 2026",
+    ),
+    "2026-08-12",
+  );
+  assert.equal(
+    extractInvoiceDate("                         Factuurdatum\n31 aug. 2026"),
+    "2026-08-31",
+  );
 });

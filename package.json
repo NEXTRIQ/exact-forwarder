@@ -9,21 +9,44 @@
     "type": "git",
     "url": "https://github.com/NEXTRIQ/exact-forwarder.git"
   },
-  "keywords": ["exact-online", "invoices", "bookkeeping", "gmail", "imap", "automation"],
+  "keywords": [
+    "exact-online",
+    "invoices",
+    "bookkeeping",
+    "gmail",
+    "imap",
+    "automation"
+  ],
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "bin": {
-    "exact-forwarder": "bin/exact-forwarder.mjs"
+    "exact-forwarder": "dist/bin/exact-forwarder.js"
   },
   "scripts": {
-    "start": "node bin/exact-forwarder.mjs",
-    "dry-run": "DRY_RUN=1 node bin/exact-forwarder.mjs",
-    "test": "node --test test/*.test.mjs"
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run clean && tsc -p tsconfig.json && node --test dist/test/*.test.js",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
+    "start": "node dist/bin/exact-forwarder.js",
+    "dry-run": "DRY_RUN=1 node dist/bin/exact-forwarder.js"
   },
   "dependencies": {
     "imapflow": "1.4.0",
     "nodemailer": "8.0.10"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "20.19.37",
+    "@types/nodemailer": "8.0.0",
+    "eslint": "10.2.1",
+    "prettier": "3.6.2",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.59.0"
   }
 }

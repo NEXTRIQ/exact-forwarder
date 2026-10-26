@@ -11,7 +11,7 @@ User=exact-forwarder
 Group=exact-forwarder
 WorkingDirectory=/opt/exact-forwarder
 EnvironmentFile=/etc/exact-forwarder/env
-ExecStart=/usr/bin/node /opt/exact-forwarder/bin/exact-forwarder.mjs
+ExecStart=/usr/bin/node /opt/exact-forwarder/dist/bin/exact-forwarder.js
 TimeoutStartSec=10min
 # status.json is world-readable for monitoring (0644); state.json itself is 0600.
 StateDirectory=exact-forwarder

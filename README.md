@@ -18,11 +18,11 @@ clearly an invoice, holds back anything doubtful with a short reason, and never 
 Every 15 minutes it reads new mail in the INBOX (read-only) and extracts the text of each PDF attachment with
 `pdftotext`. Each message then gets one of three outcomes:
 
-| Outcome | When |
-|---|---|
-| **forward** | PDF attachment, an invoice word in the subject, file name or PDF, and SPF/DKIM/DMARC passing for the sender's domain. On top of that, the sender is listed in `senders.conf`, **or** it is an unknown business sender whose PDF has an invoice number, an amount and your own company name. |
-| **review** (notice, nothing sent) | Contracts, quotes, policies, reminders, pro formas, failed payments, ID documents or payslips. Also unauthenticated senders, free-mail senders that are not listed, mail from your own domain, invoices without a PDF, and PDFs that were already forwarded. |
-| **skip** (silent) | Newsletters, PDFs without any invoice signal (CVs, brochures), bounces, Exact itself, its own forwards. |
+| Outcome                           | When                                                                                                                                                                                                                                                                                        |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **forward**                       | PDF attachment, an invoice word in the subject, file name or PDF, and SPF/DKIM/DMARC passing for the sender's domain. On top of that, the sender is listed in `senders.conf`, **or** it is an unknown business sender whose PDF has an invoice number, an amount and your own company name. |
+| **review** (notice, nothing sent) | Contracts, quotes, policies, reminders, pro formas, failed payments, ID documents or payslips. Also unauthenticated senders, free-mail senders that are not listed, mail from your own domain, invoices without a PDF, and PDFs that were already forwarded.                                |
+| **skip** (silent)                 | Newsletters, PDFs without any invoice signal (CVs, brochures), bounces, Exact itself, its own forwards.                                                                                                                                                                                     |
 
 Forwarded and held-back invoices produce a notice by email and/or Telegram, with supplier, invoice number, date,
 amount incl. VAT and, for a review, the reason. Notices are in Dutch, because the target audience is Dutch
@@ -50,7 +50,7 @@ bookkeeping.
 ```sh
 sudo useradd --system --home /nonexistent --shell /usr/sbin/nologin exact-forwarder
 sudo git clone https://github.com/NEXTRIQ/exact-forwarder.git /opt/exact-forwarder
-cd /opt/exact-forwarder && sudo npm ci --omit=dev
+cd /opt/exact-forwarder && sudo npm ci && sudo npm run build && sudo npm prune --omit=dev
 
 sudo install -d -m 755 /etc/exact-forwarder
 sudo install -m 600 env.example /etc/exact-forwarder/env              # then fill it in
@@ -69,7 +69,7 @@ sudo systemctl daemon-reload
    ```sh
    sudo systemd-run --pty --wait --uid=exact-forwarder \
      -p EnvironmentFile=/etc/exact-forwarder/env -p StateDirectory=exact-forwarder \
-     /usr/bin/node /opt/exact-forwarder/bin/exact-forwarder.mjs seed --since 2026-01-01T00:00:00Z
+     /usr/bin/node /opt/exact-forwarder/dist/bin/exact-forwarder.js seed --since 2026-01-01T00:00:00Z
    ```
    This reads the Sent folder, hashes every PDF sent to your Exact address(es), including
    `LEGACY_EXACT_ADDRESSES`, and only considers mail after the later of `--since` and the last send.
@@ -82,14 +82,14 @@ To pause, create `/etc/exact-forwarder/PAUSE`. To resume, delete it.
 All settings come from environment variables. [`env.example`](env.example) documents each one. The most
 important ones:
 
-| Variable | Required | Meaning |
-|---|---|---|
-| `MAIL_ACCOUNT`, `MAIL_PASSWORD` | yes | Mailbox and app password |
-| `EXACT_PURCHASE_ADDRESS` | yes | `…@inkoop.exactonline.nl` |
-| `EXACT_SALES_ADDRESS` | no | `…@verkoop.exactonline.nl`, only used for senders listed as `sales` |
-| `NOTIFY_EMAIL` and/or `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | one of them | Where notices go. `NOTIFY_EMAIL` must be on an own domain. |
-| `OWN_NAMES` | recommended | Names that appear on invoices addressed to you. Without it, unknown senders are always reviewed. |
-| `MAX_PER_RUN` | no (10) | Burst guardrail |
+| Variable                                                        | Required    | Meaning                                                                                          |
+| --------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------ |
+| `MAIL_ACCOUNT`, `MAIL_PASSWORD`                                 | yes         | Mailbox and app password                                                                         |
+| `EXACT_PURCHASE_ADDRESS`                                        | yes         | `…@inkoop.exactonline.nl`                                                                        |
+| `EXACT_SALES_ADDRESS`                                           | no          | `…@verkoop.exactonline.nl`, only used for senders listed as `sales`                              |
+| `NOTIFY_EMAIL` and/or `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | one of them | Where notices go. `NOTIFY_EMAIL` must be on an own domain.                                       |
+| `OWN_NAMES`                                                     | recommended | Names that appear on invoices addressed to you. Without it, unknown senders are always reviewed. |
+| `MAX_PER_RUN`                                                   | no (10)     | Burst guardrail                                                                                  |
 
 `senders.conf` lists known suppliers (`purchase`), your own invoicing address (`sales`) and senders to ignore
 (`exclude`). See [`senders.conf.example`](senders.conf.example). It is re-read on every run.
@@ -98,6 +98,7 @@ important ones:
 
 After every run the tool writes `/var/lib/exact-forwarder/status.json`:
 
+<!-- prettier-ignore -->
 ```json
 {"lastRunAt":"…","lastOkAt":"…","lastError":null,"dryRun":false,"counts":{"scanned":2,"forward":1,"review":1}}
 ```
@@ -112,24 +113,31 @@ staleness, not as a crash.
 
 ```sh
 npm ci
-npm test          # node:test, no network; the PDF test needs pdftotext
+npm run check     # typecheck, lint, format check and tests
+npm test          # compile, then node:test; no network; the PDF test needs pdftotext
+npm run build     # compile src/ and bin/ to dist/
 ```
 
-The code is plain ES modules without a build step. Decisions live in pure functions (`classify`, `extract`,
-`senders`) and are tested without I/O. `runOnce` takes its mailbox, SMTP and notifier as dependencies, so the
-whole run is tested end to end with fakes.
+The code is TypeScript in strict mode (including `noUncheckedIndexedAccess`), compiled with `tsc` to ES
+modules in `dist/`, with ESLint (type-checked rules) and Prettier. The only runtime dependencies are imapflow
+and nodemailer. Decisions live in pure functions (`classify`, `extract`, `senders`) and are tested without I/O.
+`runOnce` takes its mailbox, SMTP and notifier as dependencies (typed in `src/types.ts`), so the whole run is
+tested end to end with fakes.
 
 ```
-bin/exact-forwarder.mjs   CLI: run, seed, status
-src/config.mjs            environment parsing and validation
-src/classify.mjs          the decision rules
-src/extract.mjs           amount, invoice number and date from PDF text (NL/EN)
-src/senders.mjs           senders.conf and SPF/DKIM/DMARC alignment
-src/main.mjs              one run, two passes; seed
-src/imap.mjs              IMAP via imapflow (read-only plus a Gmail label)
-src/smtp.mjs              SMTP via nodemailer with a recipient allowlist
-src/notify.mjs            notices (Telegram, email) and the daily summary
-src/state.mjs             atomic state and status files
+bin/exact-forwarder.ts   CLI: run, seed, status
+src/types.ts             domain types and the Mailbox / Smtp / Notifier interfaces
+src/config.ts            environment parsing and validation
+src/classify.ts          the decision rules
+src/extract.ts           amount, invoice number and date from PDF text (NL/EN)
+src/senders.ts           senders.conf and SPF/DKIM/DMARC alignment
+src/main.ts              one run, two passes; seed
+src/imap.ts              IMAP via imapflow (read-only plus a Gmail label)
+src/smtp.ts              SMTP via nodemailer with a recipient allowlist
+src/notify.ts            notices (Telegram, email) and the daily summary
+src/state.ts             atomic state and status files
+src/pdf.ts               text extraction with pdftotext, sandboxed and bounded
+src/errors.ts            reading fields from thrown values
 ```
 
 ## Limitations
