@@ -20,7 +20,7 @@
   "scripts": {
     "start": "node bin/exact-forwarder.mjs",
     "dry-run": "DRY_RUN=1 node bin/exact-forwarder.mjs",
-    "test": "node --test \"test/*.test.mjs\""
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "imapflow": "1.4.0",
