@@ -37,7 +37,7 @@
     "dry-run": "DRY_RUN=1 node dist/bin/exact-forwarder.js"
   },
   "dependencies": {
-    "imapflow": "1.7.8",
+    "imapflow": "2.9.1",
     "nodemailer": "10.2.1"
   },
   "devDependencies": {
