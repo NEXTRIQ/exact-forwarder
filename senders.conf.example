@@ -1,0 +1,21 @@
+# /etc/exact-forwarder/senders.conf  (root:root, mode 644). Re-read on every run; no restart needed.
+#
+# Format: <direction> <domain or full address> <display name>
+#   purchase  supplier invoice to you            -> EXACT_PURCHASE_ADDRESS
+#   sales     your own sales invoice (own domain) -> EXACT_SALES_ADDRESS
+#   exclude   never forward; with an invoice signal you still get a review notice
+# Dutch keywords work too: inkoop, verkoop, uitsluiten.
+#
+# A domain covers its subdomains. Free-mail domains (gmail.com, outlook.com, ...) are only accepted as a full
+# address. Guardrails apply to known suppliers as well: PDF attachment, invoice word, passing SPF/DKIM/DMARC,
+# and never contracts, quotes, reminders or ID documents.
+
+purchase  notify.cloudflare.com     Cloudflare
+purchase  github.com                GitHub
+purchase  google.com                Google Workspace
+# purchase  builder.jansen@gmail.com  Klusbedrijf Jansen
+
+# sales     invoices@example.com      Own invoicing tool
+
+# Exact itself (prevents loops)
+exclude   exactonline.nl            Exact
